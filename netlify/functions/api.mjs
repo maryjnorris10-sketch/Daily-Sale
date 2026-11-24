@@ -72,7 +72,10 @@ export async function handle(req, S) {
     const date = url.searchParams.get('date');
     const rows = (await allC()).map(c => {
       let prev = c.opening || 0;
-      for (const [d, e] of Object.entries(c.days || {})) if (d < date) prev += e.morning + e.afternoon - e.ret - e.paid;
+      for (const [d, e] of Object.entries(c.days || {})) {
+        if (d < date) prev += e.morning + e.afternoon - e.ret - e.paid + (e.adj || 0);
+        else if (d === date) prev += e.adj || 0;
+      }
       const e = (c.days || {})[date] || {};
       return { id: c._id, name: c.name, dm: c.dm || '', prev, morning: e.morning || 0, afternoon: e.afternoon || 0, ret: e.ret || 0, paid: e.paid || 0 };
     });
@@ -85,7 +88,28 @@ export async function handle(req, S) {
     c.days ||= {};
     const e = c.days[body.date] ||= { morning: 0, afternoon: 0, ret: 0, paid: 0 };
     ['morning', 'afternoon', 'ret', 'paid'].forEach(f => { if (f in body) e[f] = num(body[f]); });
+    if ('prev' in body) { // আগের বাকি হাতে ঠিক করা: এই তারিখ থেকে সামনের সব হিসাবে প্রযোজ্য
+      let base = c.opening || 0;
+      for (const [d, x] of Object.entries(c.days)) if (d < body.date) base += x.morning + x.afternoon - x.ret - x.paid + (x.adj || 0);
+      e.adj = (+body.prev || 0) - base;
+    }
     await S.setJSON('c/' + c._id, c);
+    return json({ ok: true });
+  }
+
+  if (route === 'clear' && m === 'PUT') {
+    // এই তারিখের সকাল/বিকাল/ফেরত/পেইড মুছে ফেলে, বাকিটা "আগের বাকি" হিসেবে রেখে দেয়
+    const { date, ids = [] } = body;
+    for (const cid of ids) {
+      const c = await getC(cid);
+      const e = c?.days?.[date];
+      if (!e) continue;
+      let base = c.opening || 0;
+      for (const [d, x] of Object.entries(c.days)) if (d < date) base += x.morning + x.afternoon - x.ret - x.paid + (x.adj || 0);
+      const due = base + (e.adj || 0) + e.morning + e.afternoon - e.ret - e.paid;
+      c.days[date] = { morning: 0, afternoon: 0, ret: 0, paid: 0, adj: due - base };
+      await S.setJSON('c/' + c._id, c);
+    }
     return json({ ok: true });
   }
 
