@@ -117,6 +117,6 @@ export async function handle(req, S) {
 }
 
 export default async req => {
-  try { return await handle(req, getStore('hisab')); }
+  try { return await handle(req, getStore({ name: 'hisab', consistency: 'strong' })); }
   catch (e) { console.error(e); return bad('সার্ভারে সমস্যা হয়েছে', 500); }
 };
