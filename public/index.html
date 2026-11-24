@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="bn">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0F8B8D">
+<title>হিসাব খাতা</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:'Noto Sans Bengali','Hind Siliguri','Siyam Rupali',system-ui,sans-serif;background:#f1f7f7;color:#12292a}
+:root{--t:#0F8B8D;--td:#0A6E70}
+button,input,select{font:inherit}
+button{background:var(--t);color:#fff;border:0;border-radius:8px;padding:8px 14px;cursor:pointer}
+button.ghost{background:#fff;color:var(--t);border:1px solid var(--t)}
+button.red{background:#c0392b}
+input,select{border:1px solid #b9d3d3;border-radius:8px;padding:8px;background:#fff;min-width:0}
+header{background:var(--t);color:#fff;padding:10px 14px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+header b{font-size:18px}
+header button{background:#ffffff33;padding:6px 10px}
+#nav{display:flex;gap:6px;padding:8px;overflow-x:auto;background:#fff;border-bottom:1px solid #d5e6e6}
+#nav button{background:#fff;color:var(--t);border:1px solid var(--t);white-space:nowrap}
+#nav button.on{background:var(--t);color:#fff}
+main{padding:10px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
+.card{background:#fff;border-radius:12px;padding:12px;margin-bottom:10px;box-shadow:0 1px 3px #0001}
+.wrap{overflow-x:auto;background:#fff;border-radius:12px}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{border-bottom:1px solid #e1eeee;padding:6px 8px;text-align:right;white-space:nowrap}
+th{background:#e4f3f3;color:var(--td)}
+td.n,th.n{text-align:left}
+td input{width:84px;text-align:right;padding:5px}
+tfoot td{font-weight:700;background:#f1f7f7}
+.due{color:#c0392b;font-weight:700}
+#auth{max-width:380px;margin:40px auto;padding:20px}
+#auth input{width:100%;margin-bottom:10px}
+#auth h1{color:var(--t);text-align:center}
+.err{color:#c0392b;min-height:20px;text-align:center}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px}
+.row .g{flex:1;min-width:120px}
+.item{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 0;border-bottom:1px solid #e1eeee}
+#printArea{display:none}
+#printArea table{font-size:12px}
+#printArea th,#printArea td{border:1px solid #888;padding:4px 6px}
+#printArea h2,#printArea h3,#printArea p{margin:4px 0}
+@media print{
+  body{background:#fff}
+  body>*:not(#printArea){display:none!important}
+  #printArea{display:block}
+}
+</style>
+<style id="pg"></style>
+</head>
+<body>
+
+<div id="auth" class="card">
+  <h1>📒 হিসাব খাতা</h1>
+  <input id="aPass" type="password" placeholder="পাসওয়ার্ড" onkeydown="if(event.key==='Enter')doAuth()">
+  <div class="err" id="aErr"></div>
+  <button style="width:100%" id="aBtn" onclick="doAuth()">লগইন</button>
+</div>
+
+<div id="app" hidden>
+  <header><b id="hShop"></b><button onclick="logout()">বের হন</button></header>
+  <div id="nav"></div>
+  <main id="main"></main>
+</div>
+<div id="printArea"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt = n => (+n || 0).toLocaleString('en-IN');
+function today() { return new Date(Date.now() - new Date().getTimezoneOffset() * 6e4).toISOString().slice(0, 10); }
+
+let pass = localStorage.p, user = JSON.parse(localStorage.u || 'null');
+let D = { customers: [], dms: [] }, rows = [], date = today(), tab = 'day', dmFilter = '', pr = '';
+
+const b64 = s => btoa(String.fromCharCode(...new TextEncoder().encode(s)));
+async function api(m, u, b) {
+  const r = await fetch('/api' + u, { method: m, headers: { 'Content-Type': 'application/json', 'x-pass': b64(pass || '') }, body: b ? JSON.stringify(b) : undefined });
+  const j = await r.json().catch(() => ({}));
+  if (r.status === 401 && localStorage.p) logout();
+  if (!r.ok) throw new Error(j.error || 'সমস্যা হয়েছে');
+  return j;
+}
+
+/* ---------- লগইন ---------- */
+async function doAuth() {
+  pass = $('#aPass').value;
+  try {
+    const r = await api('POST', '/login', {});
+    user = r.user;
+    localStorage.p = pass; localStorage.u = JSON.stringify(user);
+    boot();
+  } catch (e) { pass = null; $('#aErr').textContent = e.message; }
+}
+function logout() { localStorage.clear(); pass = null; location.reload(); }
+
+async function boot() {
+  if (!pass) return;
+  $('#auth').hidden = true; $('#app').hidden = false;
+  $('#hShop').textContent = '📒 ' + (user.shop || 'হিসাব খাতা');
+  D = await api('GET', '/data');
+  await go(tab);
+}
+
+/* ---------- ক্যালকুলেশন ---------- */
+const calc = r => { r.total = r.prev + r.morning + r.afternoon - r.ret; r.due = r.total - r.paid; return r; };
+const fRows = () => rows.filter(r => !dmFilter || (dmFilter === '-' ? !r.dm : r.dm === dmFilter));
+const sum = (R, k) => R.reduce((s, r) => s + r[k], 0);
+const dmName = k => k === '-' || !k ? 'অ্যাসাইন নেই' : (D.dms.find(m => m._id === k) || {}).name || '?';
+
+async function loadDay() { rows = (await api('GET', '/day?date=' + date)).map(calc); }
+async function go(t) {
+  tab = t;
+  if (t === 'day' || t === 'dm') await loadDay();
+  render();
+}
+async function setDate(v) { date = v; await loadDay(); render(); }
+function render() {
+  $('#nav').innerHTML = [['day', 'দৈনিক হিসাব'], ['dm', 'ডেলিভারি রিপোর্ট'], ['cust', 'কাস্টমার'], ['men', 'ডেলিভারি ম্যান']]
+    .map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" onclick="go('${k}')">${l}</button>`).join('');
+  ({ day: vDay, dm: vReport, cust: vCust, men: vMen })[tab]();
+}
+
+const bar = () => `<div class="bar">
+  <input type="date" value="${date}" onchange="setDate(this.value)">
+  <select onchange="dmFilter=this.value;render()">
+    <option value="">সব ডেলিভারি ম্যান</option>
+    ${D.dms.map(m => `<option value="${m._id}" ${dmFilter === m._id ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}
+    <option value="-" ${dmFilter === '-' ? 'selected' : ''}>অ্যাসাইন নেই</option>
+  </select>
+  <select id="size"><option>A4</option><option>A5</option></select>
+  <button onclick="doPrint()">🖨 প্রিন্ট</button></div>`;
+
+const head = title => `<h2>${esc(user.shop)}</h2><p><b>${title}</b> &nbsp; তারিখ: ${date}${dmFilter ? ' &nbsp; ডেলিভারি ম্যান: ' + esc(dmName(dmFilter)) : ''}</p>`;
+
+function doPrint() {
+  $('#pg').textContent = '@page{size:' + $('#size').value + ';margin:10mm}';
+  $('#printArea').innerHTML = pr;
+  window.print();
+}
+
+/* ---------- দৈনিক হিসাব ---------- */
+function footTds(R) {
+  return `<td class="n">মোট (${R.length} জন)</td><td>${fmt(sum(R, 'prev'))}</td><td>${fmt(sum(R, 'morning'))}</td><td>${fmt(sum(R, 'afternoon'))}</td><td>${fmt(sum(R, 'ret'))}</td><td>${fmt(sum(R, 'total'))}</td><td>${fmt(sum(R, 'paid'))}</td><td class="due">${fmt(sum(R, 'due'))}</td>`;
+}
+const TH = '<th class="n">কাস্টমার</th><th>আগের বাকি</th><th>সকাল</th><th>বিকাল</th><th>ফেরত</th><th>মোট পাওনা</th><th>পেইড</th><th>বাকি</th>';
+
+function vDay() {
+  const R = fRows();
+  const inp = (r, f) => `<td><input type="number" min="0" inputmode="decimal" value="${r[f] || ''}" onchange="sv('${r.id}','${f}',this.value)"></td>`;
+  $('#main').innerHTML = bar() + (R.length ? `<div class="wrap"><table><thead><tr>${TH}</tr></thead><tbody>${R.map(r =>
+    `<tr><td class="n">${esc(r.name)}</td><td>${fmt(r.prev)}</td>${inp(r, 'morning')}${inp(r, 'afternoon')}${inp(r, 'ret')}<td id="t${r.id}">${fmt(r.total)}</td>${inp(r, 'paid')}<td id="d${r.id}" class="due">${fmt(r.due)}</td></tr>`).join('')}</tbody>
+    <tfoot><tr id="foot">${footTds(R)}</tr></tfoot></table></div>` : '<div class="card">আগে "কাস্টমার" ট্যাব থেকে কাস্টমার যোগ করুন।</div>');
+  pr = head('দৈনিক হিসাব') + `<table><thead><tr>${TH}</tr></thead><tbody>${R.map(r =>
+    `<tr><td style="text-align:left">${esc(r.name)}</td><td>${fmt(r.prev)}</td><td>${fmt(r.morning)}</td><td>${fmt(r.afternoon)}</td><td>${fmt(r.ret)}</td><td>${fmt(r.total)}</td><td>${fmt(r.paid)}</td><td>${fmt(r.due)}</td></tr>`).join('')}
+    <tr style="font-weight:700">${footTds(R)}</tr></tbody></table>`;
+}
+async function sv(id, f, v) {
+  const r = rows.find(x => x.id === id);
+  r[f] = Math.max(0, +v || 0); calc(r);
+  $('#t' + id).textContent = fmt(r.total);
+  $('#d' + id).textContent = fmt(r.due);
+  $('#foot').innerHTML = footTds(fRows());
+  try { await api('PUT', '/entry', { customer: id, date, [f]: r[f] }); }
+  catch (e) { alert('সেভ হয়নি: ' + e.message); }
+}
+
+/* ---------- ডেলিভারি ম্যান রিপোর্ট ---------- */
+function vReport() {
+  const R = fRows().filter(r => r.total || r.paid);
+  const g = {};
+  R.forEach(r => (g[r.dm || '-'] ??= []).push(r));
+  let h = '';
+  Object.keys(g).forEach(k => {
+    const L = g[k];
+    h += `<h3>${esc(dmName(k))} — ${L.length} টি দোকান</h3><table><thead><tr><th class="n">কাস্টমার</th><th>মোট পাওনা</th><th>পেইড</th><th>বাকি</th></tr></thead><tbody>
+      ${L.map(r => `<tr><td style="text-align:left">${esc(r.name)}</td><td>${fmt(r.total)}</td><td>${fmt(r.paid)}</td><td>${fmt(r.due)}</td></tr>`).join('')}
+      <tr style="font-weight:700"><td style="text-align:left">মোট</td><td>${fmt(sum(L, 'total'))}</td><td>${fmt(sum(L, 'paid'))}</td><td>${fmt(sum(L, 'due'))}</td></tr></tbody></table>`;
+  });
+  h = h || '<p>এই তারিখে কোনো হিসাব নেই।</p>';
+  h += `<h3>সর্বমোট: পাওনা ${fmt(sum(R, 'total'))} | পেইড ${fmt(sum(R, 'paid'))} | বাকি ${fmt(sum(R, 'due'))}</h3>`;
+  $('#main').innerHTML = bar() + `<div class="card">${h.replace(/<table>/g, '<div class="wrap"><table>').replace(/<\/table>/g, '</table></div>')}</div>`;
+  pr = head('ডেলিভারি ম্যান ভিত্তিক রিপোর্ট') + h;
+}
+
+/* ---------- কাস্টমার ---------- */
+function vCust() {
+  const opts = sel => `<option value="">— ডেলিভারি ম্যান —</option>` + D.dms.map(m => `<option value="${m._id}" ${sel === m._id ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
+  $('#main').innerHTML = `<div class="card"><b>নতুন কাস্টমার</b><div class="row" style="margin-top:8px">
+    <input class="g" id="cN" placeholder="কাস্টমারের নাম"><input class="g" id="cP" type="tel" placeholder="মোবাইল (ঐচ্ছিক)">
+    <select class="g" id="cD">${opts('')}</select><input class="g" id="cO" type="number" placeholder="আগের বাকি (৳)">
+    <button onclick="addCust()">যোগ করুন</button></div></div>
+    <div class="card">${D.customers.map(c => `<div class="item"><span><b>${esc(c.name)}</b> <small>${esc(c.phone)}</small></span>
+      <span class="row" style="margin:0"><select onchange="upCust('${c._id}','dm',this.value)">${opts(c.dm ? String(c.dm) : '')}</select>
+      <input type="number" style="width:100px" value="${c.opening || ''}" placeholder="শুরুর বাকি" onchange="upCust('${c._id}','opening',this.value)">
+      <button class="red" onclick="delCust('${c._id}')">মুছুন</button></span></div>`).join('') || 'কোনো কাস্টমার নেই'}</div>`;
+}
+async function addCust() {
+  try {
+    await api('POST', '/customer', { name: $('#cN').value, phone: $('#cP').value, dm: $('#cD').value, opening: $('#cO').value });
+    D = await api('GET', '/data'); vCust();
+  } catch (e) { alert(e.message); }
+}
+async function upCust(id, f, v) {
+  const c = D.customers.find(x => x._id === id);
+  c[f] = v;
+  try { await api('PUT', '/customer/' + id, c); } catch (e) { alert(e.message); }
+}
+async function delCust(id) {
+  if (!confirm('এই কাস্টমার ও তার সব হিসাব মুছে যাবে। নিশ্চিত?')) return;
+  await api('DELETE', '/customer/' + id);
+  D = await api('GET', '/data'); vCust();
+}
+
+/* ---------- ডেলিভারি ম্যান ---------- */
+function vMen() {
+  $('#main').innerHTML = `<div class="card"><div class="row"><input class="g" id="mN" placeholder="ডেলিভারি ম্যানের নাম"><button onclick="addMan()">যোগ করুন</button></div></div>
+    <div class="card">${D.dms.map(m => `<div class="item"><span><b>${esc(m.name)}</b> — ${D.customers.filter(c => String(c.dm) === m._id).length} টি দোকান</span>
+      <button class="red" onclick="delMan('${m._id}')">মুছুন</button></div>`).join('') || 'কোনো ডেলিভারি ম্যান নেই'}</div>`;
+}
+async function addMan() {
+  try { await api('POST', '/dm', { name: $('#mN').value }); D = await api('GET', '/data'); vMen(); }
+  catch (e) { alert(e.message); }
+}
+async function delMan(id) {
+  if (!confirm('মুছে ফেললে তার দোকানগুলো "অ্যাসাইন নেই" হয়ে যাবে। নিশ্চিত?')) return;
+  await api('DELETE', '/dm/' + id);
+  D = await api('GET', '/data'); vMen();
+}
+
+boot();
+</script>
+</body>
+</html>
