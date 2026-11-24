@@ -150,9 +150,9 @@ const TH = '<th class="n">কাস্টমার</th><th class="n">ডেল�
 function vDay() {
   const R = fRows().sort((a, b) => dmName(a.dm).localeCompare(dmName(b.dm), 'bn') || a.name.localeCompare(b.name, 'bn'));
   const dn = r => r.dm ? esc(dmName(r.dm)) : '—';
-  const inp = (r, f) => `<td><input type="number" min="0" inputmode="decimal" value="${r[f] || ''}" onchange="sv('${r.id}','${f}',this.value)"></td>`;
+  const inp = (r, f) => `<td><input type="number" ${f === 'prev' ? '' : 'min="0"'} inputmode="decimal" value="${r[f] || ''}" onchange="sv('${r.id}','${f}',this.value)"></td>`;
   $('#main').innerHTML = bar() + (R.length ? `<div class="wrap"><table><thead><tr>${TH}</tr></thead><tbody>${R.map(r =>
-    `<tr><td class="n">${esc(r.name)}</td><td class="n">${dn(r)}</td><td>${fmt(r.prev)}</td>${inp(r, 'morning')}${inp(r, 'afternoon')}${inp(r, 'ret')}<td id="t${r.id}">${fmt(r.total)}</td>${inp(r, 'paid')}<td id="d${r.id}" class="due">${fmt(r.due)}</td></tr>`).join('')}</tbody>
+    `<tr><td class="n">${esc(r.name)}</td><td class="n">${dn(r)}</td>${inp(r, 'prev')}${inp(r, 'morning')}${inp(r, 'afternoon')}${inp(r, 'ret')}<td id="t${r.id}">${fmt(r.total)}</td>${inp(r, 'paid')}<td id="d${r.id}" class="due">${fmt(r.due)}</td></tr>`).join('')}</tbody>
     <tfoot><tr id="foot">${footTds(R)}</tr></tfoot></table></div>` : '<div class="card">আগে "কাস্টমার" ট্যাব থেকে কাস্টমার যোগ করুন।</div>');
   pr = head('দৈনিক হিসাব') + `<table><thead><tr>${TH}</tr></thead><tbody>${R.map(r =>
     `<tr><td style="text-align:left">${esc(r.name)}</td><td style="text-align:left">${dn(r)}</td><td>${fmt(r.prev)}</td><td>${fmt(r.morning)}</td><td>${fmt(r.afternoon)}</td><td>${fmt(r.ret)}</td><td>${fmt(r.total)}</td><td>${fmt(r.paid)}</td><td>${fmt(r.due)}</td></tr>`).join('')}
@@ -160,7 +160,7 @@ function vDay() {
 }
 async function sv(id, f, v) {
   const r = rows.find(x => x.id === id);
-  r[f] = Math.max(0, +v || 0); calc(r);
+  r[f] = f === 'prev' ? (+v || 0) : Math.max(0, +v || 0); calc(r);
   $('#t' + id).textContent = fmt(r.total);
   $('#d' + id).textContent = fmt(r.due);
   $('#foot').innerHTML = footTds(fRows());
