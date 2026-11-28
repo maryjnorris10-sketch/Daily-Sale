@@ -23,12 +23,13 @@ export async function handle(req, S) {
     return list.filter(Boolean).sort((a, b) => a.name.localeCompare(b.name, 'bn'));
   };
   const getDMs = async () => (await S.get('dms', { type: 'json' })) || [];
+  const getAreas = async () => (await S.get('areas', { type: 'json' })) || [];
 
   if (route === 'login' && m === 'POST') return json({ user: { shop: process.env.SHOP_NAME || 'হিসাব খাতা' } });
 
   if (route === 'data' && m === 'GET') {
     const cs = (await allC()).map(({ days, ...c }) => c);
-    return json({ customers: cs, dms: await getDMs() });
+    return json({ customers: cs, dms: await getDMs(), areas: await getAreas() });
   }
 
   if (route === 'dm' && m === 'POST') {
@@ -42,14 +43,39 @@ export async function handle(req, S) {
   }
   if (route === 'dm' && m === 'DELETE') {
     await S.setJSON('dms', (await getDMs()).filter(d => d._id !== id));
+    await S.setJSON('areas', (await getAreas()).map(a => a.dm === id ? { ...a, dm: '' } : a));
     for (const c of await allC()) if (c.dm === id) { c.dm = ''; await S.setJSON('c/' + c._id, c); }
+    return json({ ok: true });
+  }
+
+  if (route === 'area' && m === 'POST') {
+    const name = (body.name || '').trim();
+    if (!name) return bad('এরিয়ার নাম দিন');
+    const areas = await getAreas();
+    const a = { _id: crypto.randomUUID(), name, dm: body.dm || '' };
+    areas.push(a);
+    await S.setJSON('areas', areas);
+    return json(a);
+  }
+  if (route === 'area' && m === 'PUT') {
+    const areas = await getAreas();
+    const a = areas.find(x => x._id === id);
+    if (!a) return bad('এরিয়া পাওয়া যায়নি', 404);
+    if (body.name?.trim()) a.name = body.name.trim();
+    a.dm = body.dm || '';
+    await S.setJSON('areas', areas);
+    return json({ ok: true });
+  }
+  if (route === 'area' && m === 'DELETE') {
+    await S.setJSON('areas', (await getAreas()).filter(a => a._id !== id));
+    for (const c of await allC()) if (c.area === id) { c.area = ''; await S.setJSON('c/' + c._id, c); }
     return json({ ok: true });
   }
 
   if (route === 'customer' && m === 'POST') {
     const name = (body.name || '').trim();
     if (!name) return bad('কাস্টমারের নাম দিন');
-    const c = { _id: crypto.randomUUID(), name, phone: body.phone || '', dm: body.dm || '', opening: +body.opening || 0, days: {} };
+    const c = { _id: crypto.randomUUID(), name, phone: body.phone || '', dm: body.dm || '', area: body.area || '', opening: +body.opening || 0, days: {} };
     await S.setJSON('c/' + c._id, c);
     return json({ ok: true });
   }
@@ -59,6 +85,7 @@ export async function handle(req, S) {
     if (body.name?.trim()) c.name = body.name.trim();
     c.phone = body.phone ?? c.phone;
     c.dm = body.dm || '';
+    c.area = body.area || '';
     c.opening = +body.opening || 0;
     await S.setJSON('c/' + id, c);
     return json({ ok: true });
@@ -70,6 +97,7 @@ export async function handle(req, S) {
 
   if (route === 'day' && m === 'GET') {
     const date = url.searchParams.get('date');
+    const am = Object.fromEntries((await getAreas()).map(a => [a._id, a]));
     const rows = (await allC()).map(c => {
       let prev = c.opening || 0;
       for (const [d, e] of Object.entries(c.days || {})) {
@@ -77,7 +105,7 @@ export async function handle(req, S) {
         else if (d === date) prev += e.adj || 0;
       }
       const e = (c.days || {})[date] || {};
-      return { id: c._id, name: c.name, dm: c.dm || '', prev, morning: e.morning || 0, afternoon: e.afternoon || 0, ret: e.ret || 0, paid: e.paid || 0 };
+      return { id: c._id, name: c.name, area: am[c.area] ? c.area : '', dm: (am[c.area] && am[c.area].dm) || c.dm || '', prev, morning: e.morning || 0, afternoon: e.afternoon || 0, ret: e.ret || 0, paid: e.paid || 0 };
     });
     return json(rows);
   }
