@@ -38,6 +38,13 @@ tfoot td{font-weight:700;background:#f1f7f7}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px}
 .row .g{flex:1;min-width:120px}
 .item{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 0;border-bottom:1px solid #e1eeee}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+.chip{background:#fff;color:var(--t);border:1px solid var(--t)}
+.chip.on{background:var(--t);color:#fff}
+.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px}
+.cards div{background:#f1f7f7;border-radius:10px;padding:8px;text-align:center}
+.cards small{display:block;color:#557}
+.cards b{font-size:18px}
 #printArea{display:none}
 #printArea table{font-size:12px}
 #printArea th,#printArea td{border:1px solid #888;padding:4px 6px}
@@ -73,7 +80,7 @@ const fmt = n => (+n || 0).toLocaleString('en-IN');
 function today() { return new Date(Date.now() - new Date().getTimezoneOffset() * 6e4).toISOString().slice(0, 10); }
 
 let pass = localStorage.p, user = JSON.parse(localStorage.u || 'null');
-let D = { customers: [], dms: [] }, rows = [], date = today(), tab = 'day', dmFilter = '', pr = '';
+let D = { customers: [], dms: [], areas: [] }, rows = [], date = today(), tab = 'day', dmFilter = '', areaSel = '', pr = '', cur = () => rows;
 
 const b64 = s => btoa(String.fromCharCode(...new TextEncoder().encode(s)));
 async function api(m, u, b) {
@@ -108,32 +115,33 @@ async function boot() {
 const calc = r => { r.total = r.prev + r.morning + r.afternoon - r.ret; r.due = r.total - r.paid; return r; };
 const fRows = () => rows.filter(r => !dmFilter || (dmFilter === '-' ? !r.dm : r.dm === dmFilter));
 const sum = (R, k) => R.reduce((s, r) => s + r[k], 0);
+const areaName = k => k === '-' || !k ? 'এরিয়া নেই' : (D.areas.find(a => a._id === k) || {}).name || '?';
 const dmName = k => k === '-' || !k ? 'অ্যাসাইন নেই' : (D.dms.find(m => m._id === k) || {}).name || '?';
 
 async function loadDay() { rows = (await api('GET', '/day?date=' + date)).map(calc); }
 async function go(t) {
   tab = t;
-  if (t === 'day' || t === 'dm') await loadDay();
+  if (t === 'day' || t === 'dm' || t === 'area') await loadDay();
   render();
 }
 async function setDate(v) { date = v; await loadDay(); render(); }
 function render() {
-  $('#nav').innerHTML = [['day', 'দৈনিক হিসাব'], ['dm', 'ডেলিভারি রিপোর্ট'], ['cust', 'কাস্টমার'], ['men', 'ডেলিভারি ম্যান']]
+  $('#nav').innerHTML = [['day', 'দৈনিক হিসাব'], ['area', 'এরিয়া'], ['dm', 'ডেলিভারি রিপোর্ট'], ['cust', 'কাস্টমার'], ['men', 'ডেলিভারি ম্যান']]
     .map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" onclick="go('${k}')">${l}</button>`).join('');
-  ({ day: vDay, dm: vReport, cust: vCust, men: vMen })[tab]();
+  ({ day: vDay, area: vArea, dm: vReport, cust: vCust, men: vMen })[tab]();
 }
 
-const bar = (extra = '') => `<div class="bar">
+const bar = (extra = '', showDm = true) => `<div class="bar">
   <input type="date" value="${date}" onchange="setDate(this.value)">
-  <select onchange="dmFilter=this.value;render()">
+  ${showDm ? `<select onchange="dmFilter=this.value;render()">
     <option value="">সব ডেলিভারি ম্যান</option>
     ${D.dms.map(m => `<option value="${m._id}" ${dmFilter === m._id ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}
     <option value="-" ${dmFilter === '-' ? 'selected' : ''}>অ্যাসাইন নেই</option>
-  </select>
+  </select>` : ''}
   <select id="size"><option>A4</option><option>A5</option></select>
   <button onclick="doPrint()">🖨 প্রিন্ট</button>${extra}</div>`;
 
-const head = title => `<h2>${esc(user.shop)}</h2><p><b>${title}</b> &nbsp; তারিখ: ${date}${dmFilter ? ' &nbsp; ডেলিভারি ম্যান: ' + esc(dmName(dmFilter)) : ''}</p>`;
+const head = (title, extra) => `<h2>${esc(user.shop)}</h2><p><b>${title}</b> &nbsp; তারিখ: ${date}${extra !== undefined ? extra : (dmFilter ? ' &nbsp; ডেলিভারি ম্যান: ' + esc(dmName(dmFilter)) : '')}</p>`;
 
 function doPrint() {
   $('#pg').textContent = '@page{size:' + $('#size').value + ';margin:10mm}';
@@ -147,21 +155,83 @@ function footTds(R) {
 }
 const TH = '<th class="n">কাস্টমার</th><th class="n">ডেলিভারি ম্যান</th><th>আগের বাকি</th><th>সকাল</th><th>বিকাল</th><th>ফেরত</th><th>মোট পাওনা</th><th>পেইড</th><th>বাকি</th>';
 
-function vDay() {
-  const R = fRows().sort((a, b) => dmName(a.dm).localeCompare(dmName(b.dm), 'bn') || a.name.localeCompare(b.name, 'bn'));
-  const dn = r => r.dm ? esc(dmName(r.dm)) : '—';
+const dn = r => r.dm ? esc(dmName(r.dm)) : '—';
+function dayTable(R) {
   const inp = (r, f) => `<td><input type="number" ${f === 'prev' ? '' : 'min="0"'} inputmode="decimal" value="${r[f] || ''}" onchange="sv('${r.id}','${f}',this.value)"></td>`;
-  $('#main').innerHTML = bar('<button class="red" onclick="clearDay()">🧹 ক্লিয়ার</button>') + (R.length ? `<div class="wrap"><table><thead><tr>${TH}</tr></thead><tbody>${R.map(r =>
+  return R.length ? `<div class="wrap"><table><thead><tr>${TH}</tr></thead><tbody>${R.map(r =>
     `<tr><td class="n">${esc(r.name)}</td><td class="n">${dn(r)}</td>${inp(r, 'prev')}${inp(r, 'morning')}${inp(r, 'afternoon')}${inp(r, 'ret')}<td id="t${r.id}">${fmt(r.total)}</td>${inp(r, 'paid')}<td id="d${r.id}" class="due">${fmt(r.due)}</td></tr>`).join('')}</tbody>
-    <tfoot><tr id="foot">${footTds(R)}</tr></tfoot></table></div>` : '<div class="card">আগে "কাস্টমার" ট্যাব থেকে কাস্টমার যোগ করুন।</div>');
-  pr = () => head('দৈনিক হিসাব') + `<table><thead><tr>${TH}</tr></thead><tbody>${R.map(r =>
+    <tfoot><tr id="foot">${footTds(R)}</tr></tfoot></table></div>` : '<div class="card">এখানে কোনো কাস্টমার নেই। "কাস্টমার" ট্যাব থেকে যোগ করুন।</div>';
+}
+function printTable(R) {
+  return `<table><thead><tr>${TH}</tr></thead><tbody>${R.map(r =>
     `<tr><td style="text-align:left">${esc(r.name)}</td><td style="text-align:left">${dn(r)}</td><td>${fmt(r.prev)}</td><td>${fmt(r.morning)}</td><td>${fmt(r.afternoon)}</td><td>${fmt(r.ret)}</td><td>${fmt(r.total)}</td><td>${fmt(r.paid)}</td><td>${fmt(r.due)}</td></tr>`).join('')}
     <tr style="font-weight:700">${footTds(R)}</tr></tbody></table>`;
 }
+function vDay() {
+  cur = fRows;
+  const R = fRows().sort((a, b) => dmName(a.dm).localeCompare(dmName(b.dm), 'bn') || a.name.localeCompare(b.name, 'bn'));
+  $('#main').innerHTML = bar('<button class="red" onclick="clearDay()">🧹 ক্লিয়ার</button>') + dayTable(R);
+  pr = () => head('দৈনিক হিসাব') + printTable(R);
+}
+
+/* ---------- এরিয়া ---------- */
+const aRowsOf = id => rows.filter(r => id === '-' ? !r.area : r.area === id);
+const aRows = () => aRowsOf(areaSel).sort((a, b) => a.name.localeCompare(b.name, 'bn'));
+const sumCards = R => `<div class="cards"><div><small>দোকান</small><b>${R.length}</b></div><div><small>মোট পাওনা</small><b>${fmt(sum(R, 'total'))}</b></div><div><small>পেইড</small><b>${fmt(sum(R, 'paid'))}</b></div><div><small>বাকি</small><b class="due">${fmt(sum(R, 'due'))}</b></div></div>`;
+const dmOpts = sel => '<option value="">— ডেলিভারি ম্যান —</option>' + D.dms.map(m => `<option value="${m._id}" ${sel === m._id ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
+
+function vArea() {
+  const nUn = aRowsOf('-').length;
+  const chips = `<div class="chips"><button class="chip ${!areaSel ? 'on' : ''}" onclick="selArea('')">📊 সব এরিয়া</button>` +
+    D.areas.map(a => `<button class="chip ${areaSel === a._id ? 'on' : ''}" onclick="selArea('${a._id}')">${esc(a.name)} (${aRowsOf(a._id).length})</button>`).join('') +
+    (nUn ? `<button class="chip ${areaSel === '-' ? 'on' : ''}" onclick="selArea('-')">এরিয়া নেই (${nUn})</button>` : '') + '</div>';
+
+  if (areaSel && areaSel !== '-' && !D.areas.find(a => a._id === areaSel)) areaSel = '';
+
+  if (!areaSel) { // সব এরিয়ার সামারি
+    cur = () => rows;
+    const G = D.areas.map(a => ({ n: a.name, d: a.dm ? dmName(a.dm) : '—', L: aRowsOf(a._id) }));
+    if (nUn) G.push({ n: 'এরিয়া নেই', d: '—', L: aRowsOf('-') });
+    const tr = (g, pr_) => `<tr><td ${pr_ ? 'style="text-align:left"' : 'class="n"'}>${esc(g.n)}</td><td ${pr_ ? 'style="text-align:left"' : 'class="n"'}>${esc(g.d)}</td><td>${g.L.length}</td><td>${fmt(sum(g.L, 'prev'))}</td><td>${fmt(sum(g.L, 'morning'))}</td><td>${fmt(sum(g.L, 'afternoon'))}</td><td>${fmt(sum(g.L, 'ret'))}</td><td>${fmt(sum(g.L, 'total'))}</td><td>${fmt(sum(g.L, 'paid'))}</td><td class="due">${fmt(sum(g.L, 'due'))}</td></tr>`;
+    const all = { n: 'সর্বমোট', d: '', L: rows };
+    const T = `<table><thead><tr><th class="n">এরিয়া</th><th class="n">ডেলিভারি ম্যান</th><th>দোকান</th><th>আগের বাকি</th><th>সকাল</th><th>বিকাল</th><th>ফেরত</th><th>মোট পাওনা</th><th>পেইড</th><th>বাকি</th></tr></thead><tbody>`;
+    $('#main').innerHTML = bar('', false) + chips +
+      `<div class="card"><b>নতুন এরিয়া</b><div class="row" style="margin-top:8px"><input class="g" id="aN" placeholder="এরিয়ার নাম (যেমন: ঢাকা)"><select class="g" id="aD">${dmOpts('')}</select><button onclick="addArea()">+ যোগ করুন</button></div></div>` +
+      (G.length ? `<div class="wrap">${T}${G.map(g => tr(g, false)).join('')}<tr style="font-weight:700;background:#f1f7f7">${tr(all, false).slice(4)}</tbody></table></div>` : '<div class="card">এখনো কোনো এরিয়া নেই। উপরে নাম ও ডেলিভারি ম্যান দিয়ে যোগ করুন, তারপর "কাস্টমার" ট্যাবে প্রতিটি দোকানের এরিয়া বেছে দিন।</div>');
+    pr = () => head('এরিয়া ভিত্তিক সামারি', '') + T + G.map(g => tr(g, true)).join('') + `<tr style="font-weight:700">${tr(all, true).slice(4)}</tbody></table>`;
+    return;
+  }
+
+  cur = aRows;
+  const a = D.areas.find(x => x._id === areaSel);
+  const R = aRows();
+  const title = a ? a.name : 'এরিয়া নেই';
+  const hd = a
+    ? `<div class="card"><div class="row" style="margin:0"><b style="font-size:18px">${esc(a.name)}</b><span>ডেলিভারি ম্যান:</span><select onchange="upArea('${a._id}',this.value)">${dmOpts(a.dm)}</select><button class="red" onclick="delArea('${a._id}')">এরিয়া মুছুন</button></div><div id="sumc">${sumCards(R)}</div></div>`
+    : `<div class="card">এই দোকানগুলোর কোনো এরিয়া ঠিক করা নেই। "কাস্টমার" ট্যাব থেকে এরিয়া বেছে দিন।<div id="sumc">${sumCards(R)}</div></div>`;
+  $('#main').innerHTML = bar('<button class="red" onclick="clearDay()">🧹 ক্লিয়ার</button>', false) + chips + hd + dayTable(R);
+  pr = () => head('এরিয়া: ' + esc(title), a && a.dm ? ' &nbsp; ডেলিভারি ম্যান: ' + esc(dmName(a.dm)) : '') + printTable(R) +
+    `<p><b>সারাংশ:</b> দোকান ${R.length} টি | মোট পাওনা ${fmt(sum(R, 'total'))} | পেইড ${fmt(sum(R, 'paid'))} | বাকি ${fmt(sum(R, 'due'))}</p>`;
+}
+function selArea(id) { areaSel = id; render(); }
+async function addArea() {
+  try { await api('POST', '/area', { name: $('#aN').value, dm: $('#aD').value }); D = await api('GET', '/data'); vArea(); }
+  catch (e) { alert(e.message); }
+}
+async function upArea(id, dm) {
+  const a = D.areas.find(x => x._id === id); a.dm = dm;
+  try { await api('PUT', '/area/' + id, a); await loadDay(); render(); } catch (e) { alert(e.message); }
+}
+async function delArea(id) {
+  if (!confirm('এরিয়া মুছে গেলে এর কাস্টমাররা "এরিয়া নেই" হয়ে যাবে। কাস্টমার বা হিসাব মুছবে না। নিশ্চিত?')) return;
+  await api('DELETE', '/area/' + id);
+  areaSel = ''; D = await api('GET', '/data'); await loadDay(); render();
+}
+
 async function clearDay() {
-  const R = fRows();
+  const R = cur();
   if (!R.length) return;
-  const who = dmFilter ? (dmFilter === '-' ? 'অ্যাসাইন-নেই দোকানগুলোর' : dmName(dmFilter) + '-এর দোকানগুলোর') : 'সব কাস্টমারের';
+  const who = tab === 'area' ? (areaSel === '-' ? 'এরিয়া-নেই দোকানগুলোর' : areaName(areaSel) + ' এরিয়ার') : dmFilter ? (dmFilter === '-' ? 'অ্যাসাইন-নেই দোকানগুলোর' : dmName(dmFilter) + '-এর দোকানগুলোর') : 'সব কাস্টমারের';
   if (!confirm(who + ' সকাল, বিকাল, ফেরত ও পেইড মুছে যাবে।\nবাকি টাকা "আগের বাকি" হিসেবে থেকে যাবে।\nনিশ্চিত?')) return;
   try {
     await api('PUT', '/clear', { date, ids: R.map(r => r.id) });
@@ -173,7 +243,8 @@ async function sv(id, f, v) {
   r[f] = f === 'prev' ? (+v || 0) : Math.max(0, +v || 0); calc(r);
   $('#t' + id).textContent = fmt(r.total);
   $('#d' + id).textContent = fmt(r.due);
-  $('#foot').innerHTML = footTds(fRows());
+  $('#foot').innerHTML = footTds(cur());
+  if ($('#sumc')) $('#sumc').innerHTML = sumCards(cur());
   try { await api('PUT', '/entry', { customer: id, date, [f]: r[f] }); }
   catch (e) { alert('সেভ হয়নি: ' + e.message); }
 }
@@ -199,18 +270,19 @@ function vReport() {
 /* ---------- কাস্টমার ---------- */
 function vCust() {
   const opts = sel => `<option value="">— ডেলিভারি ম্যান —</option>` + D.dms.map(m => `<option value="${m._id}" ${sel === m._id ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
+  const aopts = sel => '<option value="">— এরিয়া —</option>' + D.areas.map(a => `<option value="${a._id}" ${sel === a._id ? 'selected' : ''}>${esc(a.name)}</option>`).join('');
   $('#main').innerHTML = `<div class="card"><b>নতুন কাস্টমার</b><div class="row" style="margin-top:8px">
     <input class="g" id="cN" placeholder="কাস্টমারের নাম"><input class="g" id="cP" type="tel" placeholder="মোবাইল (ঐচ্ছিক)">
-    <select class="g" id="cD">${opts('')}</select><input class="g" id="cO" type="number" placeholder="আগের বাকি (৳)">
+    <select class="g" id="cA">${aopts('')}</select><select class="g" id="cD">${opts('')}</select><input class="g" id="cO" type="number" placeholder="আগের বাকি (৳)">
     <button onclick="addCust()">যোগ করুন</button></div></div>
     <div class="card">${D.customers.map(c => `<div class="item"><span><b>${esc(c.name)}</b> <small>${esc(c.phone)}</small></span>
-      <span class="row" style="margin:0"><select onchange="upCust('${c._id}','dm',this.value)">${opts(c.dm ? String(c.dm) : '')}</select>
+      <span class="row" style="margin:0"><select onchange="upCust('${c._id}','area',this.value)">${aopts(c.area || '')}</select><select onchange="upCust('${c._id}','dm',this.value)">${opts(c.dm ? String(c.dm) : '')}</select>
       <input type="number" style="width:100px" value="${c.opening || ''}" placeholder="শুরুর বাকি" onchange="upCust('${c._id}','opening',this.value)">
       <button class="red" onclick="delCust('${c._id}')">মুছুন</button></span></div>`).join('') || 'কোনো কাস্টমার নেই'}</div>`;
 }
 async function addCust() {
   try {
-    await api('POST', '/customer', { name: $('#cN').value, phone: $('#cP').value, dm: $('#cD').value, opening: $('#cO').value });
+    await api('POST', '/customer', { name: $('#cN').value, phone: $('#cP').value, dm: $('#cD').value, area: $('#cA').value, opening: $('#cO').value });
     D = await api('GET', '/data'); vCust();
   } catch (e) { alert(e.message); }
 }
